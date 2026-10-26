@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS core.entry_features (
     driver_circuit_avg_finish_3      REAL,
     driver_circuit_appearances       REAL,
     circuit_overtaking_index         REAL,
-    circuit_sc_rate                  REAL,
+    circuit_dnf_rate                 REAL,
     circuit_laps                     REAL,
     circuit_is_street                REAL,
     season_round                     REAL,
@@ -171,6 +171,10 @@ CREATE TABLE IF NOT EXISTS core.entry_features (
     quali_gap_to_teammate_pct        REAL,
     fp_longrun_gap_pct               REAL,
     fp_longrun_rank                  REAL,
+
+    -- not model features by default: these drive the naive baselines
+    prev_finish_position             REAL,
+    season_points_to_date            REAL,
 
     -- targets
     finish_position                  SMALLINT,

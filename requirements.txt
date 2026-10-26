@@ -8,6 +8,7 @@ numpy>=1.26
 
 # --- models ---
 scikit-learn>=1.5    # Ridge, RandomForest, LogisticRegression, StandardScaler
+scipy>=1.13          # spearman rank correlation
 xgboost>=2.1
 
 # --- storage ---

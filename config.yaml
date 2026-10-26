@@ -7,10 +7,12 @@
 data:
   start_season: 2018          # FastF1's full timing data begins in 2018
   end_season: 2026
-  # Practice long-run pace needs lap data for FP2/FP3, which roughly triples
-  # ingestion time. Set false for a much faster first build (post_quali mode
-  # then falls back to qualifying pace alone).
-  load_practice_pace: true
+  # FastF1 3.9+ requires an F1 TV subscription for lap-by-lap timing, which is
+  # what practice long-run pace, weather and safety-car flags are built from.
+  # Results and qualifying times come from Jolpica and stay free, so the model
+  # works fine without it. Set F1_USERNAME / F1_PASSWORD in .env and flip this
+  # to true if you have a subscription and want practice pace back.
+  load_practice_pace: false
   use_openf1_enrichment: true # OpenF1 covers 2023+ only; purely additive
 
 training:
@@ -51,7 +53,7 @@ features:
     - driver_circuit_avg_finish_3
     - driver_circuit_appearances
     - circuit_overtaking_index
-    - circuit_sc_rate
+    - circuit_dnf_rate
     - circuit_laps
     - circuit_is_street
     - season_round
@@ -61,8 +63,8 @@ features:
     - grid_position
     - quali_gap_to_pole_pct
     - quali_gap_to_teammate_pct
-    - fp_longrun_gap_pct
-    - fp_longrun_rank
+    # fp_longrun_gap_pct and fp_longrun_rank need lap data (F1 TV subscription,
+    # see data.load_practice_pace above). Re-add them here once it is enabled.
 
 models:
   # Defaults used for a plain backtest/predict. `scripts/tune.py` searches the
