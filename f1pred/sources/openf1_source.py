@@ -54,13 +54,30 @@ class _RateLimiter:
 _limiter = _RateLimiter()
 
 
+MAX_RETRIES = 3
+
+
 def _get(path: str, **params) -> list[dict]:
-    _limiter.wait()
-    response = requests.get(f"{BASE_URL}/{path}", params=params, timeout=120)
-    if response.status_code == 404:
-        return []
-    response.raise_for_status()
-    return response.json()
+    """GET with a short retry. A whole season's backfill is ~45 requests, so
+    one dropped connection should not cost the lot."""
+    last: Exception | None = None
+    for attempt in range(MAX_RETRIES):
+        _limiter.wait()
+        try:
+            response = requests.get(f"{BASE_URL}/{path}", params=params,
+                                    timeout=120)
+        except requests.RequestException as exc:
+            last = exc
+            time.sleep(2 ** attempt)
+            continue
+        if response.status_code == 404:
+            return []
+        if response.status_code == 429:          # throttled: back off and retry
+            time.sleep(5 * (attempt + 1))
+            continue
+        response.raise_for_status()
+        return response.json()
+    raise RuntimeError(f"openf1 {path} failed after {MAX_RETRIES} tries: {last}")
 
 
 def list_practice_sessions(season: int) -> pd.DataFrame:

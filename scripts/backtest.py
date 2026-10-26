@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from f1pred.backtest import run  # noqa: E402
 from f1pred.config import MODES, load_config  # noqa: E402
 from f1pred.metrics import format_table  # noqa: E402
+from f1pred.predict import apply_tuned_recency, tuned_overrides  # noqa: E402
 
 
 def main() -> None:
@@ -23,12 +24,23 @@ def main() -> None:
                     help="how many recent races to score")
     ap.add_argument("--shuffle-target", action="store_true",
                     help="scramble the target to prove there is no leakage")
+    ap.add_argument("--use-tuned", action="store_true",
+                    help="score the settings stored by scripts/tune.py "
+                         "instead of the config.yaml defaults")
     args = ap.parse_args()
 
     cfg = load_config()
+    overrides = None
+    source = "config.yaml"
+    if args.use_tuned:
+        cfg, found = apply_tuned_recency(cfg, args.mode)
+        overrides = tuned_overrides(args.mode)
+        source = "ml.tuned_params" if found else "config.yaml (nothing tuned yet)"
+
     print(f"mode={args.mode}  half_life={cfg.recency_half_life}  "
-          f"features={len(cfg.feature_names(args.mode))}")
+          f"features={len(cfg.feature_names(args.mode))}  settings={source}")
     results, _ = run(cfg, args.mode, n_test_races=args.races,
+                     model_overrides=overrides,
                      shuffle_target=args.shuffle_target)
     print()
     print(format_table(results))

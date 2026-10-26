@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from f1pred import models
-from f1pred.backtest import _training_rows
+from f1pred.backtest import training_rows
 from f1pred.config import Config
 from f1pred.db import read_sql, start_run, upsert_df
 from f1pred.features import build_features, next_event
@@ -80,7 +80,7 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
 
     history = features.dropna(subset=["finish_position"])
     train = history[history["event_date"] < event["event_date"]]
-    fitting = _training_rows(train, cfg)
+    fitting = training_rows(train, cfg)
 
     # Ask the raw table, not the feature frame: by this point grid_position
     # has already been imputed to the field median, so it is never NaN and a

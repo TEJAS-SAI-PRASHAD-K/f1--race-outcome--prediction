@@ -29,7 +29,7 @@ def _race_order(df: pd.DataFrame) -> pd.DataFrame:
             .reset_index(drop=True))
 
 
-def _training_rows(train: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+def training_rows(train: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """Rows the position regressor learns from.
 
     Retirements are dropped by default: "where would this car have finished"
@@ -44,13 +44,18 @@ def _training_rows(train: pd.DataFrame, cfg: Config) -> pd.DataFrame:
 def run(cfg: Config, mode: str, n_test_races: int | None = None,
         model_overrides: dict[str, dict] | None = None,
         shuffle_target: bool = False, only_models: list[str] | None = None,
-        include_baselines: bool = True,
+        include_baselines: bool = True, skip_last: int = 0,
         persist: bool = True, verbose: bool = True) -> tuple[dict, pd.DataFrame]:
     """Returns (metrics per model, all out-of-sample predictions).
 
     `only_models` restricts which algorithms are fitted, which is what makes
     hyperparameter search affordable: a tuning trial for Ridge has no reason
     to refit a random forest 30 times.
+
+    `skip_last` ends the scoring window that many races before the present.
+    Tuning uses it to select on an EARLIER block than the one the final
+    backtest reports on; otherwise hyperparameters are chosen on the same
+    races they are later judged by, and the headline number flatters itself.
     """
     features = load_features()
     feature_names = cfg.feature_names(mode)
@@ -62,7 +67,8 @@ def run(cfg: Config, mode: str, n_test_races: int | None = None,
     scored = features.dropna(subset=["finish_position"])
     order = _race_order(scored)
     n_test = n_test_races or cfg.n_test_races
-    test_events = order.tail(n_test)["event_id"].tolist()
+    end = len(order) - skip_last
+    test_events = order.iloc[max(0, end - n_test):end]["event_id"].tolist()
 
     collected: list[pd.DataFrame] = []
 
@@ -74,7 +80,7 @@ def run(cfg: Config, mode: str, n_test_races: int | None = None,
             continue
 
         test = features[features["event_id"] == event_id].copy()
-        fitting = _training_rows(train, cfg)
+        fitting = training_rows(train, cfg)
         if fitting.empty or test.empty:
             continue
 
