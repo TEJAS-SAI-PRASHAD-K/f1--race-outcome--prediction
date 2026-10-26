@@ -22,10 +22,11 @@ training:
   # races more. Try 10 vs 25 vs 100 and watch the backtest move.
   recency_half_life_races: 25
 
-  # Extra multiplier on top of the decay, per season. Use it to lean harder on
-  # the current regulation era than pure recency would.
+  # Extra multiplier on top of the decay, per season. Measured as redundant:
+  # the search picked 1.0 in both modes, because a short half-life already
+  # concentrates weight on the current season. Kept as a knob, off by default.
   season_weight_multiplier:
-    2026: 3.0
+    2026: 1.0
 
   # DNFs are a different process from "how fast was this car". Training the
   # position regressor only on classified finishers keeps the target clean;
