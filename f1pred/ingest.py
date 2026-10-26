@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from f1pred.db import get_engine, read_sql, upsert_df
 from f1pred.sources import fastf1_source as ff1
+from f1pred.sources import openf1_source as of1
 
 
 class RateLimited(RuntimeError):
@@ -158,3 +159,44 @@ def ingest_range(start: int, end: int, force: bool = False) -> None:
             return
         print(f"  {season}: {c['events']:>2} events, {c['results']:>4} results, "
               f"{c['quali']:>4} quali rows")
+
+
+def ingest_openf1(start: int, end: int) -> None:
+    """Add practice long-run pace for 2023+ from OpenF1.
+
+    Separate from the FastF1 pass because it is the slower of the two (one
+    request per session, inside a 30-per-minute budget) and because it is
+    strictly additive: the model works without it, just with one fewer
+    pre-race pace signal.
+    """
+    first = max(start, of1.FIRST_SEASON)
+    if first > end:
+        print(f"  openf1 covers {of1.FIRST_SEASON}+ only, nothing to do")
+        return
+
+    known_drivers = set(read_sql("SELECT driver_code FROM raw.drivers")["driver_code"])
+
+    for season in range(first, end + 1):
+        events = read_sql(
+            "SELECT event_id, event_date FROM raw.events WHERE season = :s",
+            {"s": season})
+        if events.empty:
+            continue
+        try:
+            pace = of1.practice_pace_for_season(season, events)
+        except Exception as exc:
+            _log(season, "FP", "error", 0, str(exc)[:300])
+            print(f"  {season}: openf1 failed - {str(exc)[:80]}")
+            continue
+
+        if pace.empty:
+            _log(season, "FP", "empty", 0)
+            print(f"  {season}: no practice pace returned")
+            continue
+
+        pace = pace[pace["driver_code"].isin(known_drivers)]
+        n = upsert_df(pace, "raw.practice_pace",
+                      ["event_id", "driver_code", "session_name"])
+        _log(season, "FP", "ok", n)
+        print(f"  {season}: {n:>4} practice pace rows "
+              f"over {pace['event_id'].nunique()} weekends")

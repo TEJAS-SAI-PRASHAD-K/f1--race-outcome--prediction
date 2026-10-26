@@ -75,8 +75,10 @@ features:
     - grid_position
     - quali_gap_to_pole_pct
     - quali_gap_to_teammate_pct
-    # fp_longrun_gap_pct and fp_longrun_rank need lap data (F1 TV subscription,
-    # see data.load_practice_pace above). Re-add them here once it is enabled.
+    # Practice race-trim pace, recovered from OpenF1 (2023+ only, imputed for
+    # earlier seasons). FastF1 can no longer supply this without F1 TV.
+    - fp_longrun_gap_pct
+    - fp_longrun_rank
 
 models:
   # Defaults used for a plain backtest/predict. `scripts/tune.py` searches the
