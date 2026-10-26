@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Secrets
+.env
+
+# FastF1 / OpenF1 HTTP caches (large, regenerable)
+cache/
+
+# Local scratch
+.DS_Store

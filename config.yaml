@@ -1,0 +1,92 @@
+# ============================================================================
+# Every tunable knob for the F1 race outcome model lives here.
+# Change a value, re-run `scripts/backtest.py`, and compare the two runs with
+# a SQL query against ml.backtest_metrics. That loop is the whole point.
+# ============================================================================
+
+data:
+  start_season: 2018          # FastF1's full timing data begins in 2018
+  end_season: 2026
+  # Practice long-run pace needs lap data for FP2/FP3, which roughly triples
+  # ingestion time. Set false for a much faster first build (post_quali mode
+  # then falls back to qualifying pace alone).
+  load_practice_pace: true
+  use_openf1_enrichment: true # OpenF1 covers 2023+ only; purely additive
+
+training:
+  # Weight of a training row decays by half every `recency_half_life_races`
+  # races. THIS IS THE MOST IMPORTANT KNOB. 2026 is year one of new technical
+  # regulations, so the pre-2026 pecking order is stale. Lower = trust recent
+  # races more. Try 10 vs 25 vs 100 and watch the backtest move.
+  recency_half_life_races: 25
+
+  # Extra multiplier on top of the decay, per season. Use it to lean harder on
+  # the current regulation era than pure recency would.
+  season_weight_multiplier:
+    2026: 3.0
+
+  # DNFs are a different process from "how fast was this car". Training the
+  # position regressor only on classified finishers keeps the target clean;
+  # DNF risk is predicted separately and shown as its own column.
+  exclude_dnf_from_regression: true
+
+backtest:
+  n_test_races: 30            # how many of the most recent races to score
+  min_train_races: 40         # refuse to score a race with less history than this
+
+features:
+  # Comment a line out to drop that feature, then re-run the backtest to read
+  # its real contribution off the MAE change. Cheapest ablation study there is.
+  base:
+    - driver_avg_finish_3
+    - driver_avg_finish_5
+    - driver_points_5
+    - driver_dnf_rate_10
+    - driver_experience_races
+    - driver_vs_teammate_quali_delta_5
+    - team_avg_finish_3
+    - team_avg_finish_5
+    - team_avg_quali_pos_3
+    - team_dnf_rate_10
+    - driver_circuit_avg_finish_3
+    - driver_circuit_appearances
+    - circuit_overtaking_index
+    - circuit_sc_rate
+    - circuit_laps
+    - circuit_is_street
+    - season_round
+    - is_sprint_weekend
+  # Only known once qualifying has run, so these are added in post_quali mode.
+  post_quali:
+    - grid_position
+    - quali_gap_to_pole_pct
+    - quali_gap_to_teammate_pct
+    - fp_longrun_gap_pct
+    - fp_longrun_rank
+
+models:
+  # Defaults used for a plain backtest/predict. `scripts/tune.py` searches the
+  # grids below and writes the winners to ml.tuned_params, which then override
+  # these automatically.
+  ridge:
+    defaults: {alpha: 10.0}
+    grid:
+      alpha: [0.1, 1.0, 10.0, 50.0, 100.0]
+  rf:
+    defaults: {n_estimators: 300, max_depth: 8, min_samples_leaf: 5, random_state: 42, n_jobs: -1}
+    grid:
+      max_depth: [6, 8, 10]
+      min_samples_leaf: [3, 5, 10]
+  xgb:
+    defaults:
+      n_estimators: 400
+      max_depth: 4
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 2.0
+      random_state: 42
+    grid:
+      max_depth: [3, 4, 5]
+      learning_rate: [0.03, 0.05, 0.1]
+      reg_lambda: [1.0, 2.0, 5.0]

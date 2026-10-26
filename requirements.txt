@@ -1,0 +1,19 @@
+# --- data sources ---
+fastf1>=3.8          # F1 timing data 2018+; uses Jolpica since Ergast shut down in 2025
+requests>=2.32       # OpenF1 REST calls
+
+# --- data handling ---
+pandas>=2.2
+numpy>=1.26
+
+# --- models ---
+scikit-learn>=1.5    # Ridge, RandomForest, LogisticRegression, StandardScaler
+xgboost>=2.1
+
+# --- storage ---
+SQLAlchemy>=2.0
+psycopg[binary]>=3.2 # PostgreSQL driver
+
+# --- config ---
+PyYAML>=6.0
+python-dotenv>=1.0
