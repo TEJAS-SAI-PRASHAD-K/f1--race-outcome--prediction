@@ -9,6 +9,9 @@ all predicted P4.
 
 from __future__ import annotations
 
+import copy
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 
@@ -20,8 +23,12 @@ from f1pred.features import build_features, next_event
 from f1pred.models import MODEL_NAMES
 
 
-def tuned_overrides(mode: str) -> dict[str, dict]:
-    """Hyperparameters found by scripts/tune.py, if it has been run."""
+# scripts/tune.py stores the recency setting under this pseudo model name,
+# because it is shared by all three models rather than belonging to one.
+RECENCY_KEY = "_recency"
+
+
+def _tuned_rows(mode: str) -> dict[str, dict]:
     df = read_sql(
         "SELECT model_name, params FROM ml.tuned_params WHERE mode = :mode",
         {"mode": mode},
@@ -29,8 +36,34 @@ def tuned_overrides(mode: str) -> dict[str, dict]:
     return {r.model_name: dict(r.params) for _, r in df.iterrows()}
 
 
+def tuned_overrides(mode: str) -> dict[str, dict]:
+    """Per-model hyperparameters found by scripts/tune.py, if it has run."""
+    return {k: v for k, v in _tuned_rows(mode).items() if k != RECENCY_KEY}
+
+
+def apply_tuned_recency(cfg: Config, mode: str) -> tuple[Config, bool]:
+    """Use the tuned half-life, which is the setting that matters most.
+
+    Without this the search would find a half-life, store it, and then have
+    it quietly ignored at prediction time - the one parameter most worth
+    tuning in a regulation-change season.
+    """
+    tuned = _tuned_rows(mode).get(RECENCY_KEY)
+    if not tuned:
+        return cfg, False
+    raw = copy.deepcopy(cfg.raw)
+    raw["training"]["recency_half_life_races"] = tuned["recency_half_life_races"]
+    raw["training"]["season_weight_multiplier"] = {
+        int(k): float(v)
+        for k, v in (tuned.get("season_weight_multiplier") or {}).items()
+    }
+    return replace(cfg, raw=raw), True
+
+
 def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataFrame, dict, pd.Series]:
     """Returns (ordered prediction table, event info, training-set summary)."""
+    cfg, used_tuned = apply_tuned_recency(cfg, mode)
+
     event = next_event()
     if event is None:
         raise RuntimeError(
@@ -49,12 +82,21 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
     train = history[history["event_date"] < event["event_date"]]
     fitting = _training_rows(train, cfg)
 
-    if mode == "post_quali" and test["grid_position"].isna().all():
-        raise RuntimeError(
-            "post_quali mode needs the grid, but qualifying has not been "
-            "ingested for this event yet. Use --mode pre_weekend, or re-run "
-            "scripts/ingest.py after qualifying."
-        )
+    # Ask the raw table, not the feature frame: by this point grid_position
+    # has already been imputed to the field median, so it is never NaN and a
+    # missing grid would silently look like every car starting 11th.
+    if mode == "post_quali":
+        have_quali = read_sql(
+            "SELECT count(*) AS n FROM raw.qualifying WHERE event_id = :eid",
+            {"eid": int(event["event_id"])},
+        )["n"].iloc[0]
+        if not have_quali:
+            raise RuntimeError(
+                f"post_quali needs the grid, but no qualifying is stored for "
+                f"{event.get('event_name')} yet.\n"
+                f"Use --mode pre_weekend, or re-run scripts/ingest.py once "
+                f"qualifying has happened."
+            )
 
     X_train = fitting[feature_names]
     y_train = fitting["finish_position"].astype(float)
@@ -98,6 +140,7 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
         "n_train_races": int(fitting["event_id"].nunique()),
         "n_train_rows": int(len(fitting)),
         "mode": mode,
+        "tuned": used_tuned,
     }
 
     if persist:
@@ -138,7 +181,8 @@ def format_prediction(out: pd.DataFrame, info: dict, cfg: Config) -> str:
         f"Next race: {name} - round {info['round']}, {date}",
         f"Mode: {info['mode']}   |   trained on {info['n_train_races']} races "
         f"({info['n_train_rows']} rows), recency half-life "
-        f"{cfg.recency_half_life}",
+        f"{cfg.recency_half_life}"
+        + ("  [tuned]" if info.get("tuned") else "  [config defaults]"),
         "",
         f"{'Pred':>4}  {'Driver':<6} {'Team':<14}{'Grid':>5}"
         f"{'Ridge':>8}{'RF':>7}{'XGB':>7}{'Ens':>7}{'P(DNF)':>8}",

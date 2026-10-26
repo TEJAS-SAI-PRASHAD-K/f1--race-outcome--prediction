@@ -19,6 +19,8 @@ explicitly:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -38,6 +40,7 @@ FEATURE_COLUMNS = [
     "circuit_laps", "circuit_is_street",
     "season_round", "is_sprint_weekend",
     "grid_position", "quali_gap_to_pole_pct", "quali_gap_to_teammate_pct",
+    "fp_longrun_gap_pct", "fp_longrun_rank",
 ]
 
 # Stored alongside the features but excluded from the model inputs: these are
@@ -49,12 +52,16 @@ SELECT r.event_id, r.driver_code, r.team_key, r.grid, r.finish_position,
        r.classified, r.dnf, r.points, r.laps_completed,
        e.season, e.round, e.event_date, e.circuit_key, e.event_format,
        c.is_street, c.lap_count,
-       q.best_ms, q.quali_position
+       q.best_ms, q.quali_position,
+       p.longrun_median_ms
 FROM raw.race_results r
 JOIN raw.events    e ON e.event_id = r.event_id
 JOIN raw.circuits  c ON c.circuit_key = e.circuit_key
 LEFT JOIN raw.qualifying q
        ON q.event_id = r.event_id AND q.driver_code = r.driver_code
+-- One practice session is stored per weekend, so this stays a 1:1 join.
+LEFT JOIN raw.practice_pace p
+       ON p.event_id = r.event_id AND p.driver_code = r.driver_code
 ORDER BY e.event_date, r.event_id, r.finish_position
 """
 
@@ -93,9 +100,13 @@ def _upcoming_entries(history: pd.DataFrame) -> pd.DataFrame:
     if event is None or history.empty:
         return pd.DataFrame()
 
+    eid = int(event["event_id"])
     qual = read_sql(
         "SELECT driver_code, best_ms, quali_position FROM raw.qualifying "
-        "WHERE event_id = :eid", {"eid": int(event["event_id"])})
+        "WHERE event_id = :eid", {"eid": eid})
+    pace = read_sql(
+        "SELECT driver_code, longrun_median_ms FROM raw.practice_pace "
+        "WHERE event_id = :eid", {"eid": eid})
 
     # Latest known team for each driver, so a mid-season switch is respected.
     latest_team = (history.sort_values("event_date")
@@ -116,9 +127,11 @@ def _upcoming_entries(history: pd.DataFrame) -> pd.DataFrame:
 
     entries["team_key"] = entries["driver_code"].map(latest_team)
     entries = entries.dropna(subset=["team_key"])
+    entries = entries.merge(pace, on="driver_code", how="left") \
+        if not pace.empty else entries.assign(longrun_median_ms=np.nan)
 
     for col, value in [
-        ("event_id", int(event["event_id"])), ("season", int(event["season"])),
+        ("event_id", eid), ("season", int(event["season"])),
         ("round", int(event["round"])), ("event_date", event["event_date"]),
         ("circuit_key", event["circuit_key"]),
         ("event_format", event["event_format"]),
@@ -289,6 +302,14 @@ def _quali_features(df: pd.DataFrame) -> pd.DataFrame:
     others = ((grp.transform("sum") - df["best_ms"].fillna(0))
               / (grp.transform("count") - 1).replace(0, np.nan))
     out["quali_gap_to_teammate_pct"] = (df["best_ms"] - others) / others * 100.0
+
+    # Race-trim pace from practice (OpenF1, 2023+). The median of a driver's
+    # clean long runs, not their headline lap, which is a low-fuel quali sim.
+    pace = df["longrun_median_ms"]
+    best = df.groupby("event_id")["longrun_median_ms"].transform("min")
+    out["fp_longrun_gap_pct"] = (pace - best) / best * 100.0
+    out["fp_longrun_rank"] = df.groupby("event_id")["longrun_median_ms"].rank(
+        method="min")
     return out
 
 
@@ -328,6 +349,9 @@ def impute(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     for col in columns:
         if col not in out.columns:
             continue
+        # Force numeric first: a column that arrived as object dtype makes
+        # fillna downcast silently, which pandas now warns about.
+        out[col] = pd.to_numeric(out[col], errors="coerce")
         s = out[col]
         # 1. the sister car's value in this same race
         team_med = out.groupby(["event_id", "team_key"])[col].transform("median")
@@ -346,6 +370,12 @@ def impute(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 def build_features(include_upcoming: bool = False) -> pd.DataFrame:
+    # A debutant's rolling window is legitimately all-NaN, and so is any
+    # feature for a season a source does not cover. numpy warns on the empty
+    # mean; the imputation step below is what handles it.
+    warnings.filterwarnings(
+        "ignore", message="Mean of empty slice", category=RuntimeWarning)
+
     df = load_entries(include_upcoming=include_upcoming)
     if df.empty:
         raise RuntimeError("raw.race_results is empty - run scripts/ingest.py first")
