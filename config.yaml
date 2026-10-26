@@ -36,6 +36,14 @@ backtest:
   n_test_races: 30            # how many of the most recent races to score
   min_train_races: 40         # refuse to score a race with less history than this
 
+tuning:
+  # Search is two-stage and deliberately so. A full grid over models AND
+  # recency would take hours; recency is also the knob that matters most, so
+  # it is found first (using Ridge, which is fastest) and then shared.
+  half_life_grid: [3, 6, 10, 20, 40, 1000]
+  season_multiplier_grid: [1.0, 2.0, 3.0]
+  n_test_races: 20          # shorter window than the backtest, for speed
+
 features:
   # Comment a line out to drop that feature, then re-run the backtest to read
   # its real contribution off the MAE change. Cheapest ablation study there is.
@@ -58,6 +66,10 @@ features:
     - circuit_is_street
     - season_round
     - is_sprint_weekend
+    # Also what baseline_championship and baseline_last_race rank on. Keeping
+    # them from the models would handicap them against their own baseline.
+    - season_points_to_date
+    - prev_finish_position
   # Only known once qualifying has run, so these are added in post_quali mode.
   post_quali:
     - grid_position
