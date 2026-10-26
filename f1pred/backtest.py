@@ -43,9 +43,15 @@ def _training_rows(train: pd.DataFrame, cfg: Config) -> pd.DataFrame:
 
 def run(cfg: Config, mode: str, n_test_races: int | None = None,
         model_overrides: dict[str, dict] | None = None,
-        shuffle_target: bool = False,
+        shuffle_target: bool = False, only_models: list[str] | None = None,
+        include_baselines: bool = True,
         persist: bool = True, verbose: bool = True) -> tuple[dict, pd.DataFrame]:
-    """Returns (metrics per model, all out-of-sample predictions)."""
+    """Returns (metrics per model, all out-of-sample predictions).
+
+    `only_models` restricts which algorithms are fitted, which is what makes
+    hyperparameter search affordable: a tuning trial for Ridge has no reason
+    to refit a random forest 30 times.
+    """
     features = load_features()
     feature_names = cfg.feature_names(mode)
     missing = [c for c in feature_names if c not in features.columns]
@@ -77,18 +83,26 @@ def run(cfg: Config, mode: str, n_test_races: int | None = None,
         if shuffle_target:
             # Leakage probe: destroy the signal inside each race. Any model
             # still scoring well is reading something it should not.
+            # The generator is advanced per group rather than reseeded, so
+            # every race gets a DIFFERENT permutation. Reusing one seed would
+            # apply the same mapping everywhere, which a model can simply
+            # learn - making the probe look clean when it is not.
+            rng = np.random.default_rng(0)
             y_train = (y_train.groupby(fitting["event_id"])
-                       .transform(lambda s: s.sample(frac=1, random_state=0).to_numpy()))
+                       .transform(lambda s: rng.permutation(s.to_numpy())))
         weights = models.sample_weights(fitting, cfg)
 
-        for name, model in models.make_models(cfg, model_overrides).items():
+        chosen = models.make_models(cfg, model_overrides)
+        if only_models is not None:
+            chosen = {k: v for k, v in chosen.items() if k in only_models}
+        for name, model in chosen.items():
             models.fit(model, X_train, y_train, weights)
             preds = test.copy()
             preds["model_name"] = name
             preds["predicted_value"] = model.predict(test[feature_names])
             collected.append(preds)
 
-        for name in baselines.applicable(mode):
+        for name in (baselines.applicable(mode) if include_baselines else []):
             preds = test.copy()
             preds["model_name"] = name
             preds["predicted_value"] = baselines.predict(test, name)

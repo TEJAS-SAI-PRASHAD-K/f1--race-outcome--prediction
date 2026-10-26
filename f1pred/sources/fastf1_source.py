@@ -124,15 +124,23 @@ def _timedelta_to_ms(series: pd.Series) -> pd.Series:
     return (pd.to_timedelta(series).dt.total_seconds() * 1000).round()
 
 
-def _is_dnf(status: str) -> bool:
-    """Classified finishers either say 'Finished' or are laps down.
+# Two vocabularies for "finished but a lap or more down" coexist in the data:
+# the older "+1 Lap" form and the newer bare "Lapped". Missing the second one
+# marks a third of the modern field as retirements and wrecks both the DNF
+# model and every rolling reliability feature.
+FINISHED_STATUSES = {"Finished", "Lapped"}
 
-    Everything else - accident, engine, gearbox, disqualified, withdrawn - is
-    treated as a DNF. This is the conventional definition and it keeps the
-    position regressor's target clean.
+
+def _is_dnf(status: str) -> bool:
+    """True when the car did not reach the flag.
+
+    Everything that is not a finish - accident, engine, gearbox, disqualified,
+    withdrawn, did not start - counts. This is the conventional definition and
+    it keeps the position regressor's target clean.
     """
     s = str(status)
-    return not (s == "Finished" or re.fullmatch(r"\+\d+ Laps?", s) is not None)
+    return not (s in FINISHED_STATUSES
+                or re.fullmatch(r"\+\d+ Laps?", s) is not None)
 
 
 def get_season_results(season: int) -> pd.DataFrame:

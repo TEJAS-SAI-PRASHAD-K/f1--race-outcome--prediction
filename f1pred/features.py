@@ -60,8 +60,8 @@ ORDER BY e.event_date, r.event_id, r.finish_position
 
 
 _UPCOMING_SQL = """
-SELECT e.event_id, e.season, e.round, e.event_date, e.circuit_key,
-       e.event_format, c.is_street, c.lap_count
+SELECT e.event_id, e.season, e.round, e.event_name, e.event_date,
+       e.circuit_key, e.event_format, c.is_street, c.lap_count
 FROM raw.events e
 JOIN raw.circuits c ON c.circuit_key = e.circuit_key
 WHERE NOT EXISTS (SELECT 1 FROM raw.race_results r WHERE r.event_id = e.event_id)
