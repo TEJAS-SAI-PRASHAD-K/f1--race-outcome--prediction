@@ -28,7 +28,7 @@ def main() -> None:
     effective_cfg, _ = apply_tuned_recency(cfg, args.mode)
     print(format_prediction(out, info, effective_cfg))
     if args.explain:
-        print(format_importance(importance))
+        print(format_importance(importance, signed=info.get("ridge_signed")))
 
 
 if __name__ == "__main__":

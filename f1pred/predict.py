@@ -20,7 +20,6 @@ from f1pred.backtest import training_rows
 from f1pred.config import Config
 from f1pred.db import read_sql, start_run, upsert_df
 from f1pred.features import build_features, next_event
-from f1pred.models import MODEL_NAMES
 
 
 # scripts/tune.py stores the recency setting under this pseudo model name,
@@ -60,8 +59,45 @@ def apply_tuned_recency(cfg: Config, mode: str) -> tuple[Config, bool]:
     return replace(cfg, raw=raw), True
 
 
-def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataFrame, dict, pd.Series]:
-    """Returns (ordered prediction table, event info, training-set summary)."""
+def apply_grid_overrides(test: pd.DataFrame, overrides: dict[str, float],
+                         mode: str) -> dict[str, float]:
+    """What-if: force a driver's starting slot and re-derive what follows.
+
+    Only meaningful in post_quali, where grid_position is the dominant
+    feature. In pre_weekend the models never see the grid, so an override
+    there would silently do nothing - hence the explicit refusal rather than
+    an inert knob.
+
+    Mutates `test` in place. Returns the overrides actually applied.
+    """
+    if not overrides:
+        return {}
+    if mode != "post_quali":
+        raise ValueError(
+            "grid overrides only affect post_quali mode; in pre_weekend the "
+            "models are not given grid_position at all, so setting it would "
+            "change nothing"
+        )
+
+    known = set(test["driver_code"])
+    unknown = set(overrides) - known
+    if unknown:
+        raise ValueError(f"not on the entry list: {sorted(unknown)}")
+
+    for code, slot in overrides.items():
+        row = test["driver_code"] == code
+        test.loc[row, "grid_position"] = float(slot)
+
+    # quali_gap_to_pole_pct is a pace measurement, not a function of the
+    # slot, so it is deliberately left as measured. Moving a car on the grid
+    # does not make it faster.
+    return {k: float(v) for k, v in overrides.items()}
+
+
+def predict_next(cfg: Config, mode: str, persist: bool = True,
+                 grid_overrides: dict[str, float] | None = None
+                 ) -> tuple[pd.DataFrame, dict, pd.Series]:
+    """Returns (ordered prediction table, event info, importances)."""
     cfg, used_tuned = apply_tuned_recency(cfg, mode)
 
     event = next_event()
@@ -98,6 +134,8 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
                 f"qualifying has happened."
             )
 
+    applied = apply_grid_overrides(test, grid_overrides or {}, mode)
+
     X_train = fitting[feature_names]
     y_train = fitting["finish_position"].astype(float)
     weights = models.sample_weights(fitting, cfg)
@@ -114,7 +152,7 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
         out[name] = model.predict(test[feature_names])
         fitted[name] = model
 
-    out["ensemble"] = out[list(MODEL_NAMES)].mean(axis=1)
+    out["ensemble"] = out[cfg.enabled_models].mean(axis=1)
 
     # Retirement risk is a separate question from pace, so it gets its own
     # model and its own column rather than being folded into the position.
@@ -141,6 +179,7 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
         "n_train_rows": int(len(fitting)),
         "mode": mode,
         "tuned": used_tuned,
+        "grid_overrides": applied,
     }
 
     if persist:
@@ -153,7 +192,7 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
         )
         rows = out.melt(
             id_vars=["driver_code", "pred", "p_dnf"],
-            value_vars=list(MODEL_NAMES) + ["ensemble"],
+            value_vars=list(cfg.enabled_models) + ["ensemble"],
             var_name="model_name", value_name="predicted_value",
         )
         rows["run_id"] = run_id
@@ -171,43 +210,80 @@ def predict_next(cfg: Config, mode: str, persist: bool = True) -> tuple[pd.DataF
         {name: models.importances(m, feature_names) for name, m in fitted.items()},
         axis=1,
     )
+    # Signed Ridge coefficients carry the direction that |value| throws away.
+    # Only available when ridge is one of the enabled models.
+    if "ridge" in fitted:
+        coefs = fitted["ridge"].named_steps["model"].coef_
+        info["ridge_signed"] = pd.Series(np.ravel(coefs), index=feature_names)
     return out, info, importance
 
 
 def format_prediction(out: pd.DataFrame, info: dict, cfg: Config) -> str:
     name = info["event_name"] or f"round {info['round']}"
     date = pd.to_datetime(info["event_date"]).date()
+    model_cols = [m for m in cfg.enabled_models if m in out.columns]
+
+    header = (f"{'Pred':>4}  {'Driver':<6} {'Team':<14}{'Grid':>5}"
+              + "".join(f"{m.upper():>8}" for m in model_cols)
+              + f"{'Ens':>7}{'P(DNF)':>8}")
     lines = [
         f"Next race: {name} - round {info['round']}, {date}",
         f"Mode: {info['mode']}   |   trained on {info['n_train_races']} races "
         f"({info['n_train_rows']} rows), recency half-life "
         f"{cfg.recency_half_life}"
         + ("  [tuned]" if info.get("tuned") else "  [config defaults]"),
+        f"Models: {', '.join(model_cols)}"
+        + (f"   |   grid overrides: {info['grid_overrides']}"
+           if info.get("grid_overrides") else ""),
         "",
-        f"{'Pred':>4}  {'Driver':<6} {'Team':<14}{'Grid':>5}"
-        f"{'Ridge':>8}{'RF':>7}{'XGB':>7}{'Ens':>7}{'P(DNF)':>8}",
+        header,
+        "-" * len(header),
     ]
-    lines.append("-" * len(lines[-1]))
     for _, r in out.iterrows():
         grid = "-" if pd.isna(r["grid"]) else f"{int(r['grid']):d}"
         pdnf = "-" if pd.isna(r["p_dnf"]) else f"{r['p_dnf']:.2f}"
         lines.append(
             f"{int(r['pred']):>4}  {r['driver_code']:<6} {r['team_key']:<14}"
-            f"{grid:>5}{r['ridge']:>8.1f}{r['rf']:>7.1f}{r['xgb']:>7.1f}"
-            f"{r['ensemble']:>7.1f}{pdnf:>8}"
+            f"{grid:>5}"
+            + "".join(f"{r[m]:>8.1f}" for m in model_cols)
+            + f"{r['ensemble']:>7.1f}{pdnf:>8}"
         )
     return "\n".join(lines)
 
 
-def format_importance(importance: pd.DataFrame, top: int = 12) -> str:
-    lines = ["", f"Top {top} features by importance "
-                 "(ridge = |standardised coefficient|, trees = impurity gain)",
-             f"{'feature':<34}{'ridge':>9}{'rf':>9}{'xgb':>9}"]
-    lines.append("-" * len(lines[-1]))
-    ordered = importance.div(importance.sum()).mean(axis=1).sort_values(
-        ascending=False).head(top)
-    for feat in ordered.index:
-        row = importance.loc[feat]
-        lines.append(f"{feat:<34}{row.get('ridge', np.nan):>9.3f}"
-                     f"{row.get('rf', np.nan):>9.3f}{row.get('xgb', np.nan):>9.3f}")
+def format_importance(importance: pd.DataFrame, signed: pd.Series | None = None,
+                      top: int = 12) -> str:
+    """Importances as each model's percentage share of its own total.
+
+    Raw values are not comparable across models - a Ridge coefficient is in
+    positions-per-standard-deviation, a tree importance is a fraction of
+    impurity reduction. Normalising each column to 100% makes the columns
+    mean the same thing, and the table is sorted on what it prints.
+
+    `signed` carries the Ridge coefficient WITH its sign, which is where the
+    direction lives: positive pushes the predicted position number up (a
+    worse finish), negative pulls it down.
+    """
+    cols = list(importance.columns)
+    share = importance.div(importance.sum()) * 100.0
+    order = share.mean(axis=1).sort_values(ascending=False).head(top)
+
+    head = f"{'feature':<34}" + "".join(f"{c + ' %':>9}" for c in cols)
+    if signed is not None:
+        head += f"{'ridge coef':>12}"
+    lines = ["", f"Top {top} features - each column is that model's % of its "
+                 "own total", head, "-" * len(head)]
+    for feat in order.index:
+        row = share.loc[feat]
+        line = f"{feat:<34}" + "".join(f"{row.get(c, np.nan):>9.1f}" for c in cols)
+        if signed is not None:
+            value = signed.get(feat)
+            line += "         -  " if value is None or pd.isna(value) \
+                else f"{value:>12.3f}"
+        lines.append(line)
+    if signed is not None:
+        lines.append("")
+        lines.append("ridge coef: change in predicted finishing position per "
+                     "1 SD of the feature")
+        lines.append("            (+ = finishes further back, - = further up)")
     return "\n".join(lines)
