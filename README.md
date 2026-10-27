@@ -10,6 +10,12 @@ to a naive baseline so you can tell whether the model is actually doing
 anything.
 
 ```bash
+python race.py                  # one file, all the knobs at the top
+```
+
+or the individual stages:
+
+```bash
 python scripts/predict_next.py --mode post_quali --explain
 ```
 
@@ -67,6 +73,38 @@ honest test of whether the rest of the features carry any signal.
 
 ---
 
+## `race.py` — the single-file control surface
+
+Every knob worth turning sits at the top of [race.py](race.py): mode, which
+models to fit, the recency half-life, each model's hyperparameters, and a
+`GRID_OVERRIDE` for what-if questions ("what if Verstappen starts P10?").
+Edit, run, read the backtest underneath the prediction. Nothing it sets
+touches `config.yaml`, so experiments cannot corrupt the defaults.
+
+**Why the modelling is not also in that file.** Single-file F1 predictors are
+common and they share a failure mode: with no walk-forward split and no
+baseline in the output, there is nothing to catch a broken target. One
+widely-shared example sets `target = qualifying_time * 1.055` — the label is
+a feature times a constant, so the model learns only that multiplier and its
+output is just qualifying order wearing a hat. It looks like it works,
+because nothing in the script is capable of telling it that it doesn't.
+
+So the knobs live in one editable file and the evaluation stays in modules
+that always print the baselines next to the models.
+
+### Beware the inert knob
+
+That same example exposes `rain_probability` and `temperature`, assigned as
+one constant to every row. A column with no variance carries no information:
+the model cannot learn from it and changing the number cannot change the
+predicted order. It is a dial wired to nothing.
+
+This project has no weather knob for that reason. Making one real needs
+per-race historical weather in the training set, which FastF1 moved behind
+an F1 TV subscription.
+
+---
+
 ## Data constraints worth knowing
 
 **FastF1 3.9 moved lap timing behind an F1 TV subscription.** Race results and
@@ -97,7 +135,7 @@ Everything lives in `config.yaml`. The three that matter most:
 
 ```yaml
 training:
-  recency_half_life_races: 25      # weight halves every N races back
+  recency_half_life_races: 40      # weight halves every N races back
   season_weight_multiplier:
     2026: 3.0                      # extra weight on the current regulations
 features:
@@ -156,7 +194,7 @@ not illustrations.
 | model | MAE | Spearman | Podium | Winner |
 |---|---|---|---|---|
 | **rf** | **3.36** | **0.673** | 1.93/3 | 63% |
-| ridge | 3.38 | 0.669 | 1.90/3 | 50% |
+| ridge *(off by default)* | 3.38 | 0.669 | 1.90/3 | 50% |
 | `baseline_grid_order` | 3.41 | 0.647 | 2.03/3 | **70%** |
 | xgb | 3.45 | 0.662 | 1.93/3 | 60% |
 | `baseline_championship` | 3.75 | 0.615 | 1.77/3 | 40% |
@@ -172,7 +210,7 @@ often, because pole position converted to victory in 70% of these races.
 |---|---|---|---|---|
 | `baseline_championship` | **3.75** | **0.615** | 1.77/3 | 40% |
 | rf | 4.04 | 0.593 | 1.60/3 | 37% |
-| ridge | 4.05 | 0.583 | 1.63/3 | 20% |
+| ridge *(off by default)* | 4.05 | 0.583 | 1.63/3 | 20% |
 | xgb | 4.06 | 0.584 | 1.60/3 | 27% |
 
 **The models lose to championship order here.** Ranking drivers by the points
@@ -245,7 +283,8 @@ python scripts/backtest.py --mode post_quali --shuffle-target
 ## Layout
 
 ```
-config.yaml          every tunable knob
+race.py              single-file control surface - start here
+config.yaml          committed defaults for every tunable knob
 db/schema.sql        raw / core / ml schemas, idempotent
 f1pred/
   config.py          loads config.yaml + .env
