@@ -22,7 +22,9 @@ from xgboost import XGBRegressor
 
 from f1pred.config import Config
 
-MODEL_NAMES = ("ridge", "rf", "xgb")
+# Everything this module knows how to build. Which of them actually run is
+# a config decision (models.enabled), not a code one.
+ALL_MODEL_NAMES = ("ridge", "rf", "xgb")
 
 
 def make_model(name: str, params: dict):
@@ -48,7 +50,7 @@ def make_models(cfg: Config, overrides: dict[str, dict] | None = None) -> dict:
     return {
         name: make_model(name, {**cfg.model_defaults(name),
                                 **overrides.get(name, {})})
-        for name in MODEL_NAMES
+        for name in cfg.enabled_models
     }
 
 

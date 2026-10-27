@@ -84,6 +84,14 @@ class Config:
             names += list(self.raw["features"]["post_quali"])
         return names
 
+    @property
+    def enabled_models(self) -> list[str]:
+        """Algorithms to fit, in config order. Defaults to all configured."""
+        names = self.raw["models"].get("enabled")
+        if not names:
+            names = [k for k in self.raw["models"] if k != "enabled"]
+        return list(names)
+
     def model_defaults(self, name: str) -> dict[str, Any]:
         return dict(self.raw["models"][name]["defaults"])
 

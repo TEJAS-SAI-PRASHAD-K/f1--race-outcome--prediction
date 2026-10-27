@@ -20,7 +20,7 @@ training:
   # races. THIS IS THE MOST IMPORTANT KNOB. 2026 is year one of new technical
   # regulations, so the pre-2026 pecking order is stale. Lower = trust recent
   # races more. Try 10 vs 25 vs 100 and watch the backtest move.
-  recency_half_life_races: 25
+  recency_half_life_races: 40
 
   # Extra multiplier on top of the decay, per season. Measured as redundant:
   # the search picked 1.0 in both modes, because a short half-life already
@@ -82,6 +82,14 @@ features:
     - fp_longrun_rank
 
 models:
+  # Which algorithms to fit. Add "ridge" back to run all three.
+  #
+  # Measured over the last 30 races, ridge was best or tied-best in three of
+  # four configurations (pre_weekend 3.94 vs rf 4.10; post_quali 3.37 vs rf
+  # 3.42), so dropping it costs a little accuracy and the most readable
+  # explanation. It stays configured below so it is one word away.
+  enabled: [rf, xgb]
+
   # Defaults used for a plain backtest/predict. `scripts/tune.py` searches the
   # grids below and writes the winners to ml.tuned_params, which then override
   # these automatically.

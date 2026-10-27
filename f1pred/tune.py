@@ -29,7 +29,7 @@ from sqlalchemy import text
 from f1pred.backtest import run as backtest_run
 from f1pred.config import Config
 from f1pred.db import get_engine, start_run, upsert_df
-from f1pred.models import MODEL_NAMES
+
 
 
 def _with_recency(cfg: Config, half_life: float, multiplier: float) -> Config:
@@ -85,7 +85,7 @@ def tune(cfg: Config, mode: str, verbose: bool = True) -> dict:
     # ---- stage 2: per-model hyperparameters ---------------------------
     best_params: dict[str, dict] = {}
     best_scores: dict[str, float] = {}
-    for name in MODEL_NAMES:
+    for name in cfg.enabled_models:
         grid = cfg.model_grid(name)
         if not grid:
             continue
